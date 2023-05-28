@@ -30,8 +30,7 @@ args = parser.parse_args()
 
 if args.api_key.startswith('@'):
     # expand ~
-    with open(os.path.expanduser(args.api_key[1:]), 'r') as f:
-        openai.api_key = f.read().strip()
+    openai.api_key_path = os.path.expanduser(args.api_key[1:])
 else:
     openai.api_key = args.api_key
 
