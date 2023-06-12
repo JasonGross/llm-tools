@@ -1,11 +1,13 @@
-import pandas as pd
-from functools import wraps
 import pickle
 from frozendict import frozendict
 import threading
 from filelock import FileLock
 from pathlib import Path
 import tempfile, os
+try:
+    import pandas as pd
+except ImportError:
+    pd = None
 
 __all__ = ['Memoize']
 
@@ -71,7 +73,7 @@ class Memoize:
         self.cache_file = Path(cache_file or (Path(Memoize.cache_base_dir) / f"{self.name}_cache.pkl"))
         self.cache = {}
         self.df_cache = set()
-        self.df = pd.DataFrame(columns=['input', 'output'])
+        self.df = pd.DataFrame(columns=['input', 'output']) if pd is not None else None
         self.df_thread_lock = threading.Lock()
         self.thread_lock = threading.Lock()
         self.file_lock = FileLock(f"{self.cache_file}.lock")
@@ -122,11 +124,12 @@ class Memoize:
         else:
             with self.thread_lock: val = self.cache[key]
         
-        with self.df_thread_lock:
-            if key not in self.df_cache:
-                self.df_cache.add(key)
-                new_row = pd.DataFrame({'input': [key], 'output': [val]})
-                self.df = pd.concat([self.df, new_row], ignore_index=True)
+        if self.df is not None:
+            with self.df_thread_lock:
+                if key not in self.df_cache:
+                    self.df_cache.add(key)
+                    new_row = pd.DataFrame({'input': [key], 'output': [val]})
+                    self.df = pd.concat([self.df, new_row], ignore_index=True)
         return val
     
     def __repr__(self):
