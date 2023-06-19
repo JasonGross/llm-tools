@@ -13,7 +13,7 @@ __all__ = ['Memoize']
 
 def to_immutable(arg):
     """Converts a list or dict to an immutable version of itself."""
-    if isinstance(arg, list):
+    if isinstance(arg, list) or isinstance(arg, tuple):
         return tuple(to_immutable(e) for e in arg)
     elif isinstance(arg, dict):
         return frozendict({k: to_immutable(v) for k, v in arg.items()})
@@ -70,7 +70,7 @@ class Memoize:
     def __init__(self, func, name=None, cache_file=None):
         self.func = func
         self.name = name or func.__name__
-        self.cache_file = Path(cache_file or (Path(Memoize.cache_base_dir) / f"{self.name}_cache.pkl"))
+        self.cache_file = Path(cache_file or (Path(Memoize.cache_base_dir) / f"{self.name}_cache.pkl")).absolute()
         self.cache = {}
         self.df_cache = set()
         self.df = pd.DataFrame(columns=['input', 'output']) if pd is not None else None
@@ -95,14 +95,25 @@ class Memoize:
         with wrap_context(self.thread_lock, skip=not use_lock):
             self.cache.update(disk_cache)
 
-    def _write_cache_to_disk(self):
+    def _write_cache_to_disk(self, skip_load=False, use_lock=True):
         """Writes the cache to disk.  The cache is locked while it's being written."""
-        with self.thread_lock:
-            with self.file_lock:
-                self._load_cache_from_disk(use_lock=False)
+        with wrap_context(self.thread_lock, skip=not use_lock):
+            with wrap_context(self.file_lock, skip=not use_lock):
+                if not skip_load: self._load_cache_from_disk(use_lock=False)
                 # use a tempfile so that we don't corrupt the cache if there's an error
                 write_via_temp(self.cache_file, (lambda f: pickle.dump(self.cache, f)))
 
+    def _uncache(self, key):
+        """Removes a key from the cache."""
+        with self.thread_lock:
+            with self.file_lock:
+                self._load_cache_from_disk(use_lock=False)
+                del self.cache[key]
+                self._write_cache_to_disk(skip_load=True, use_lock=False)
+
+    def uncache(self, *args, **kwargs):
+        return self._uncache((to_immutable(args), to_immutable(kwargs)))
+    
     @classmethod
     def sync_all(cls):
         """Writes all caches to disk."""
