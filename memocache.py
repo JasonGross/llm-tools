@@ -103,6 +103,14 @@ class Memoize:
                 # use a tempfile so that we don't corrupt the cache if there's an error
                 write_via_temp(self.cache_file, (lambda f: pickle.dump(self.cache, f)))
 
+    def kwargs_of_key(self, key):
+        """Returns the kwargs of a key."""
+        return key[1]
+
+    def args_of_key(self, key):
+        """Returns the args of a key."""
+        return key[0]
+
     def _uncache(self, key):
         """Removes a key from the cache."""
         with self.thread_lock:
@@ -113,7 +121,7 @@ class Memoize:
 
     def uncache(self, *args, **kwargs):
         return self._uncache((to_immutable(args), to_immutable(kwargs)))
-    
+
     @classmethod
     def sync_all(cls):
         """Writes all caches to disk."""
@@ -134,7 +142,7 @@ class Memoize:
             self._write_cache_to_disk()
         else:
             with self.thread_lock: val = self.cache[key]
-        
+
         if self.df is not None:
             with self.df_thread_lock:
                 if key not in self.df_cache:
@@ -142,9 +150,9 @@ class Memoize:
                     new_row = pd.DataFrame({'input': [key], 'output': [val]})
                     self.df = pd.concat([self.df, new_row], ignore_index=True)
         return val
-    
+
     def __repr__(self):
         return f"Memoize(func={self.func!r}, name={self.name!r}, cache_file={self.cache_file!r})"
-    
+
     def __str__(self):
         return f"Memoize(func={self.func}, name={self.name}, cache_file={self.cache_file})"
