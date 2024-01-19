@@ -1,5 +1,6 @@
 import pickle
 from typing import IO, Any, Callable, Optional, Tuple, TypeVar, Union
+from contextlib import AbstractContextManager, contextmanager
 from frozendict import frozendict
 import threading
 from filelock import FileLock
@@ -17,7 +18,7 @@ __all__ = ["Memoize", "USE_PANDAS"]
 
 USE_PANDAS = pd is not None
 
-T = TypeVar("T")
+T = TypeVar("T", bound=AbstractContextManager)
 KEY = Tuple[tuple, frozendict]
 
 
@@ -31,22 +32,12 @@ def to_immutable(arg: Any) -> Any:
         return arg
 
 
-class DummyContextWrapper:
+class DummyContextWrapper(AbstractContextManager):
     def __enter__(self):
         pass
 
     def __exit__(self, *args):
         pass
-
-
-class AnonymousContextWrapper(DummyContextWrapper):
-    def __init__(
-        self, enter: Optional[Callable] = None, exit: Optional[Callable] = None
-    ):
-        if enter is not None:
-            self.__enter__ = enter
-        if exit is not None:
-            self.__exit__ = exit
 
 
 def wrap_context(ctx: T, skip: bool = False) -> Union[T, DummyContextWrapper]:
@@ -214,13 +205,11 @@ class Memoize:
                     self.df = pd.concat([self.df, new_row], ignore_index=True)
         return val
 
-    def _sync_cache_enter(self):
-        self._load_cache_from_disk()
-        return Memoize(self, disk_write_only=True)
-
+    @contextmanager
     def sync_cache(self):
         """Returns a context object that syncs the cache to disk and returns a copy of the function that can be called without incurring the overhead of reading from disk."""
-        return AnonymousContextWrapper(enter=self._sync_cache_enter)
+        self._load_cache_from_disk()
+        yield Memoize(self, disk_write_only=True)
 
     def __repr__(self):
         return f"Memoize(func={self.func!r}, name={self.name!r}, cache_file={self.cache_file!r})"
