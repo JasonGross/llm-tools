@@ -1,15 +1,20 @@
+import os
 import pickle
 from frozendict import frozendict
 import threading
 from filelock import FileLock
 from pathlib import Path
 import tempfile, os
+pd = None
 try:
-    import pandas as pd
+    if not os.getenv('MEMOCACHE_NO_PANDAS'):
+        import pandas as pd
 except ImportError:
-    pd = None
+    pass
 
-__all__ = ['Memoize']
+__all__ = ['Memoize', 'USE_PANDAS']
+
+USE_PANDAS = pd is not None
 
 def to_immutable(arg):
     """Converts a list or dict to an immutable version of itself."""
@@ -72,7 +77,8 @@ class Memoize:
 
     cache_base_dir = "cache"
 
-    def __init__(self, func, name=None, cache_file=None, disk_write_only=False):
+    def __init__(self, func, name=None, cache_file=None, disk_write_only=False, use_pandas=None):
+        if use_pandas is None: use_pandas = USE_PANDAS
         if isinstance(func, Memoize):
             self.func = func.func
             self.name = name or func.name
@@ -90,7 +96,7 @@ class Memoize:
             self.cache_file = Path(cache_file or (Path(Memoize.cache_base_dir) / f"{self.name}_cache.pkl")).absolute()
             self.cache = {}
             self.df_cache = set()
-            self.df = pd.DataFrame(columns=['input', 'output']) if pd is not None else None
+            self.df = pd.DataFrame(columns=['input', 'output']) if use_pandas and pd is not None else None
             self.df_thread_lock = threading.Lock()
             self.thread_lock = threading.Lock()
             self.file_lock = FileLock(f"{self.cache_file}.lock")
