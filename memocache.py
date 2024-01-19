@@ -214,14 +214,13 @@ class Memoize:
                     self.df = pd.concat([self.df, new_row], ignore_index=True)
         return val
 
+    def _sync_cache_enter(self):
+        self._load_cache_from_disk()
+        return Memoize(self, disk_write_only=True)
+
     def sync_cache(self):
         """Returns a context object that syncs the cache to disk and returns a copy of the function that can be called without incurring the overhead of reading from disk."""
-
-        def enter():
-            self._load_cache_from_disk()
-            return Memoize(self, disk_write_only=True)
-
-        return AnonymousContextWrapper(enter=enter)
+        return AnonymousContextWrapper(enter=self._sync_cache_enter)
 
     def __repr__(self):
         return f"Memoize(func={self.func!r}, name={self.name!r}, cache_file={self.cache_file!r})"
