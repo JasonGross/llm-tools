@@ -1,4 +1,5 @@
 import pickle
+from typing import IO, Any, Callable, Optional, Tuple, TypeVar, Union
 from frozendict import frozendict
 import threading
 from filelock import FileLock
@@ -16,8 +17,11 @@ __all__ = ["Memoize", "USE_PANDAS"]
 
 USE_PANDAS = pd is not None
 
+T = TypeVar("T")
+KEY = Tuple[tuple, frozendict]
 
-def to_immutable(arg):
+
+def to_immutable(arg: Any) -> Any:
     """Converts a list or dict to an immutable version of itself."""
     if isinstance(arg, list) or isinstance(arg, tuple):
         return tuple(to_immutable(e) for e in arg)
@@ -36,19 +40,21 @@ class DummyContextWrapper:
 
 
 class AnonymousContextWrapper(DummyContextWrapper):
-    def __init__(self, enter=None, exit=None):
+    def __init__(
+        self, enter: Optional[Callable] = None, exit: Optional[Callable] = None
+    ):
         if enter is not None:
             self.__enter__ = enter
         if exit is not None:
             self.__exit__ = exit
 
 
-def wrap_context(ctx, skip=False):
+def wrap_context(ctx: T, skip: bool = False) -> Union[T, DummyContextWrapper]:
     """If skip is True, returns a dummy context manager that does nothing."""
     return ctx if not skip else DummyContextWrapper()
 
 
-def write_via_temp(file_path, do_write):
+def write_via_temp(file_path: Union[str, Path], do_write: Callable[[IO[bytes]], Any]):
     """Writes to a file by writing to a temporary file and then renaming it.
     This ensures that the file is never in an inconsistent state."""
     temp_dir = Path(file_path).parent
@@ -92,19 +98,24 @@ class Memoize:
     cache_base_dir = "cache"
 
     def __init__(
-        self, func, name=None, cache_file=None, disk_write_only=False, use_pandas=None
+        self,
+        func: Callable,
+        name: Optional[str] = None,
+        cache_file: Optional[Union[str, Path]] = None,
+        disk_write_only: bool = False,
+        use_pandas: Optional[bool] = None,
     ):
         if use_pandas is None:
             use_pandas = USE_PANDAS
         if isinstance(func, Memoize):
             self.func = func.func
-            self.name = name or func.name
+            self.name: str = name or func.name
             self.cache_file = Path(cache_file or func.cache_file).absolute()
-            self.cache = func.cache
-            self.df_cache = func.df_cache
+            self.cache: dict = func.cache
+            self.df_cache: set = func.df_cache
             self.df = func.df
-            self.df_thread_lock = func.df_thread_lock
-            self.thread_lock = func.thread_lock
+            self.df_thread_lock: threading.Lock = func.df_thread_lock
+            self.thread_lock: threading.Lock = func.thread_lock
             self.file_lock = func.file_lock
             if name is not None:
                 Memoize.instances[name] = self
@@ -114,25 +125,25 @@ class Memoize:
             self.cache_file = Path(
                 cache_file or (Path(Memoize.cache_base_dir) / f"{self.name}_cache.pkl")
             ).absolute()
-            self.cache = {}
-            self.df_cache = set()
+            self.cache: dict = {}
+            self.df_cache: set = set()
             self.df = (
                 pd.DataFrame(columns=["input", "output"])
                 if use_pandas and pd is not None
                 else None
             )
-            self.df_thread_lock = threading.Lock()
-            self.thread_lock = threading.Lock()
-            self.file_lock = FileLock(f"{self.cache_file}.lock")
+            self.df_thread_lock: threading.Lock = threading.Lock()
+            self.thread_lock: threading.Lock = threading.Lock()
+            self.file_lock: FileLock = FileLock(f"{self.cache_file}.lock")
             Memoize.instances[self.name] = self
             self.cache_file.parent.mkdir(parents=True, exist_ok=True)
             self._load_cache_from_disk()
-        self.disk_write_only = disk_write_only
+        self.disk_write_only: bool = disk_write_only
         for attr in ("__doc__", "__name__", "__module__"):
             if hasattr(func, attr):
                 setattr(self, attr, getattr(func, attr))
 
-    def _load_cache_from_disk(self, use_lock=True):
+    def _load_cache_from_disk(self, use_lock: bool = True):
         """Loads the cache from disk.  If use_lock is True, then the cache is locked while it's being loaded."""
         with wrap_context(self.file_lock, skip=not use_lock):
             try:
@@ -143,7 +154,7 @@ class Memoize:
         with wrap_context(self.thread_lock, skip=not use_lock):
             self.cache.update(disk_cache)
 
-    def _write_cache_to_disk(self, skip_load=False, use_lock=True):
+    def _write_cache_to_disk(self, skip_load: bool = False, use_lock: bool = True):
         """Writes the cache to disk.  The cache is locked while it's being written."""
         with wrap_context(self.thread_lock, skip=not use_lock):
             with wrap_context(self.file_lock, skip=not use_lock):
@@ -152,15 +163,15 @@ class Memoize:
                 # use a tempfile so that we don't corrupt the cache if there's an error
                 write_via_temp(self.cache_file, (lambda f: pickle.dump(self.cache, f)))
 
-    def kwargs_of_key(self, key):
+    def kwargs_of_key(self, key: KEY) -> frozendict:
         """Returns the kwargs of a key."""
         return key[1]
 
-    def args_of_key(self, key):
+    def args_of_key(self, key: KEY) -> tuple:
         """Returns the args of a key."""
         return key[0]
 
-    def _uncache(self, key):
+    def _uncache(self, key: KEY):
         """Removes a key from the cache."""
         with self.thread_lock:
             with self.file_lock:
@@ -195,7 +206,7 @@ class Memoize:
             with self.thread_lock:
                 val = self.cache[key]
 
-        if self.df is not None:
+        if self.df is not None and pd is not None:
             with self.df_thread_lock:
                 if key not in self.df_cache:
                     self.df_cache.add(key)
