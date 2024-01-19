@@ -24,6 +24,11 @@ class DummyContextWrapper:
     def __enter__(self): pass
     def __exit__(self, *args): pass
 
+class AnonymousContextWrapper(DummyContextWrapper):
+    def __init__(self, enter=None, exit=None):
+        if enter is not None: self.__enter__ = enter
+        if exit is not None: self.__exit__ = exit
+
 def wrap_context(ctx, skip=False):
     """If skip is True, returns a dummy context manager that does nothing."""
     return ctx if not skip else DummyContextWrapper()
@@ -67,19 +72,32 @@ class Memoize:
 
     cache_base_dir = "cache"
 
-    def __init__(self, func, name=None, cache_file=None):
-        self.func = func
-        self.name = name or func.__name__
-        self.cache_file = Path(cache_file or (Path(Memoize.cache_base_dir) / f"{self.name}_cache.pkl")).absolute()
-        self.cache = {}
-        self.df_cache = set()
-        self.df = pd.DataFrame(columns=['input', 'output']) if pd is not None else None
-        self.df_thread_lock = threading.Lock()
-        self.thread_lock = threading.Lock()
-        self.file_lock = FileLock(f"{self.cache_file}.lock")
-        Memoize.instances[self.name] = self
-        self.cache_file.parent.mkdir(parents=True, exist_ok=True)
-        self._load_cache_from_disk()
+    def __init__(self, func, name=None, cache_file=None, disk_write_only=False):
+        if isinstance(func, Memoize):
+            self.func = func.func
+            self.name = name or func.name
+            self.cache_file = Path(cache_file or func.cache_file).absolute()
+            self.cache = func.cache
+            self.df_cache = func.df_cache
+            self.df = func.df
+            self.df_thread_lock = func.df_thread_lock
+            self.thread_lock = func.thread_lock
+            self.file_lock = func.file_lock
+            if name is not None: Memoize.instances[name] = self
+        else:
+            self.func = func
+            self.name = name or func.__name__
+            self.cache_file = Path(cache_file or (Path(Memoize.cache_base_dir) / f"{self.name}_cache.pkl")).absolute()
+            self.cache = {}
+            self.df_cache = set()
+            self.df = pd.DataFrame(columns=['input', 'output']) if pd is not None else None
+            self.df_thread_lock = threading.Lock()
+            self.thread_lock = threading.Lock()
+            self.file_lock = FileLock(f"{self.cache_file}.lock")
+            Memoize.instances[self.name] = self
+            self.cache_file.parent.mkdir(parents=True, exist_ok=True)
+            self._load_cache_from_disk()
+        self.disk_write_only = disk_write_only
         for attr in ('__doc__', '__name__', '__module__'):
             if hasattr(func, attr):
                 setattr(self, attr, getattr(func, attr))
@@ -134,7 +152,7 @@ class Memoize:
         immutable_kwargs = to_immutable(kwargs)
         key = (immutable_args, immutable_kwargs)
 
-        self._load_cache_from_disk()
+        if not self.disk_write_only: self._load_cache_from_disk()
 
         if key not in self.cache.keys():
             val = self.func(*args, **kwargs)
@@ -150,6 +168,13 @@ class Memoize:
                     new_row = pd.DataFrame({'input': [key], 'output': [val]})
                     self.df = pd.concat([self.df, new_row], ignore_index=True)
         return val
+
+    def sync_cache(self):
+        """Returns a context object that syncs the cache to disk and returns a copy of the function that can be called without incurring the overhead of reading from disk."""
+        def enter():
+            self._load_cache_from_disk()
+            return Memoize(self, disk_write_only=True)
+        return AnonymousContextWrapper(enter=enter)
 
     def __repr__(self):
         return f"Memoize(func={self.func!r}, name={self.name!r}, cache_file={self.cache_file!r})"
