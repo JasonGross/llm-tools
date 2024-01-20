@@ -1,10 +1,18 @@
+import inspect
 import pickle
 from typing import IO, Any, Callable, Optional, Tuple, TypeVar, Union
-from contextlib import AbstractContextManager, contextmanager
+from contextlib import (
+    AbstractAsyncContextManager,
+    AbstractContextManager,
+    contextmanager,
+    asynccontextmanager,
+)
+import concurrent.futures
 from frozendict import frozendict
 import threading
 from filelock import FileLock
 from pathlib import Path
+import asyncio
 import tempfile, os
 
 pd = None
@@ -18,7 +26,7 @@ __all__ = ["Memoize", "USE_PANDAS"]
 
 USE_PANDAS = pd is not None
 
-T = TypeVar("T", bound=AbstractContextManager)
+T = TypeVar("T", bound=Union[AbstractContextManager, AbstractAsyncContextManager])
 KEY = Tuple[tuple, frozendict]
 
 
@@ -32,11 +40,17 @@ def to_immutable(arg: Any) -> Any:
         return arg
 
 
-class DummyContextWrapper(AbstractContextManager):
+class DummyContextWrapper(AbstractContextManager, AbstractAsyncContextManager):
     def __enter__(self):
         pass
 
     def __exit__(self, *args):
+        pass
+
+    async def __aenter__(self):
+        pass
+
+    async def __aexit__(self, *args):
         pass
 
 
@@ -75,6 +89,20 @@ def write_via_temp(file_path: Union[str, Path], do_write: Callable[[IO[bytes]], 
                 os.rename(backup_file_path, file_path)
             else:
                 os.remove(backup_file_path)
+
+
+# https://stackoverflow.com/a/63425191/377022
+_pool = concurrent.futures.ThreadPoolExecutor()
+
+
+@asynccontextmanager
+async def async_lock(lock):
+    loop = asyncio.get_event_loop()
+    await loop.run_in_executor(_pool, lock.acquire)
+    try:
+        yield  # the lock is held
+    finally:
+        lock.release()
 
 
 class Memoize:
@@ -180,11 +208,20 @@ class Memoize:
         for instance in cls.instances.values():
             instance._write_cache_to_disk()
 
-    def __call__(self, *args, **kwargs):
+    def key_of_args(self, *args, **kwargs) -> KEY:
+        return (to_immutable(args), to_immutable(kwargs))
+
+    def _update_df(self, key: KEY, val: Any):
+        if self.df is not None and pd is not None:
+            with self.df_thread_lock:
+                if key not in self.df_cache:
+                    self.df_cache.add(key)
+                    new_row = pd.DataFrame({"input": [key], "output": [val]})
+                    self.df = pd.concat([self.df, new_row], ignore_index=True)
+
+    def _sync_call(self, *args, **kwargs):
         """Calls the function, caching the result if it hasn't been called with the same arguments before."""
-        immutable_args = to_immutable(args)
-        immutable_kwargs = to_immutable(kwargs)
-        key = (immutable_args, immutable_kwargs)
+        key = self.key_of_args(*args, **kwargs)
 
         if not self.disk_write_only:
             self._load_cache_from_disk()
@@ -198,13 +235,34 @@ class Memoize:
             with self.thread_lock:
                 val = self.cache[key]
 
-        if self.df is not None and pd is not None:
-            with self.df_thread_lock:
-                if key not in self.df_cache:
-                    self.df_cache.add(key)
-                    new_row = pd.DataFrame({"input": [key], "output": [val]})
-                    self.df = pd.concat([self.df, new_row], ignore_index=True)
+        self._update_df(key, val)
         return val
+
+    async def _async_call(self, *args, **kwargs):
+        """Calls the function, caching the result if it hasn't been called with the same arguments before."""
+        key = self.key_of_args(*args, **kwargs)
+
+        if not self.disk_write_only:
+            await asyncio.to_thread(self._load_cache_from_disk)
+
+        if key not in self.cache.keys():
+            val = await self.func(*args, **kwargs)
+            async with async_lock(self.thread_lock):
+                self.cache[key] = val
+            await asyncio.to_thread(self._write_cache_to_disk)
+        else:
+            async with async_lock(self.thread_lock):
+                val = self.cache[key]
+
+        self._update_df(key, val)
+        return val
+
+    def __call__(self, *args, **kwargs):
+        """Calls the function, caching the result if it hasn't been called with the same arguments before."""
+        if inspect.iscoroutinefunction(self.func):
+            return self._async_call(*args, **kwargs)
+        else:
+            return self._sync_call(*args, **kwargs)
 
     @contextmanager
     def sync_cache(self, inplace: bool = False):
