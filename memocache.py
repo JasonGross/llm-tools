@@ -116,6 +116,7 @@ class Memoize:
         cache_file: Optional[Union[str, Path]] = None,
         disk_write_only: bool = False,
         use_pandas: Optional[bool] = None,
+        force_async: bool = False,
     ):
         if use_pandas is None:
             use_pandas = USE_PANDAS
@@ -129,6 +130,7 @@ class Memoize:
             self.df_thread_lock: threading.Lock = func.df_thread_lock
             self.thread_lock: threading.Lock = func.thread_lock
             self.file_lock = func.file_lock
+            self.force_async = func.force_async
             if name is not None:
                 Memoize.instances[name] = self
         else:
@@ -147,6 +149,7 @@ class Memoize:
             self.df_thread_lock: threading.Lock = threading.Lock()
             self.thread_lock: threading.Lock = threading.Lock()
             self.file_lock: FileLock = FileLock(f"{self.cache_file}.lock")
+            self.force_async = force_async
             Memoize.instances[self.name] = self
             self.cache_file.parent.mkdir(parents=True, exist_ok=True)
             self._load_cache_from_disk()
@@ -252,7 +255,7 @@ class Memoize:
 
     def __call__(self, *args, **kwargs):
         """Calls the function, caching the result if it hasn't been called with the same arguments before."""
-        if inspect.iscoroutinefunction(self.func):
+        if inspect.iscoroutinefunction(self.func) or self.force_async:
             return self._async_call(*args, **kwargs)
         else:
             return self._sync_call(*args, **kwargs)
