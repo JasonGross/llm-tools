@@ -2,7 +2,6 @@ import inspect
 import pickle
 from typing import IO, Any, Callable, Optional, Tuple, TypeVar, Union
 from contextlib import (
-    AbstractAsyncContextManager,
     AbstractContextManager,
     contextmanager,
     asynccontextmanager,
@@ -26,7 +25,7 @@ __all__ = ["Memoize", "USE_PANDAS"]
 
 USE_PANDAS = pd is not None
 
-T = TypeVar("T", bound=Union[AbstractContextManager, AbstractAsyncContextManager])
+T = TypeVar("T", bound=AbstractContextManager)
 KEY = Tuple[tuple, frozendict]
 
 
@@ -40,17 +39,11 @@ def to_immutable(arg: Any) -> Any:
         return arg
 
 
-class DummyContextWrapper(AbstractContextManager, AbstractAsyncContextManager):
+class DummyContextWrapper(AbstractContextManager):
     def __enter__(self):
         pass
 
     def __exit__(self, *args):
-        pass
-
-    async def __aenter__(self):
-        pass
-
-    async def __aexit__(self, *args):
         pass
 
 
