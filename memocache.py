@@ -129,7 +129,8 @@ class Memoize:
             Memoize.instances[self.name] = self
             self.cache_file.parent.mkdir(parents=True, exist_ok=True)
             self._load_cache_from_disk()
-        self.disk_write_only: bool = disk_write_only
+        self.disk_write_only: int = disk_write_only
+        self.disk_write_only_lock: threading.Lock = threading.Lock()
         for attr in ("__doc__", "__name__", "__module__"):
             if hasattr(func, attr):
                 setattr(self, attr, getattr(func, attr))
@@ -206,10 +207,23 @@ class Memoize:
         return val
 
     @contextmanager
-    def sync_cache(self):
-        """Returns a context object that syncs the cache to disk and returns a copy of the function that can be called without incurring the overhead of reading from disk."""
+    def sync_cache(self, inplace: bool = False):
+        """Syncs the cache to disk on entering the context.
+
+        If inplace is False, returns a copy of the function that can be called without incurring the overhead of reading from disk.
+        If inplace is True, mutates the current function to avoid reading from disk.
+        """
         self._load_cache_from_disk()
-        yield Memoize(self, disk_write_only=True)
+        if inplace:
+            with self.disk_write_only_lock:
+                self.disk_write_only += 1
+            try:
+                yield self
+            finally:
+                with self.disk_write_only_lock:
+                    self.disk_write_only -= 1
+        else:
+            yield Memoize(self, disk_write_only=True)
 
     def __repr__(self):
         return f"Memoize(func={self.func!r}, name={self.name!r}, cache_file={self.cache_file!r})"
