@@ -10,6 +10,7 @@ from dataclasses import (
 )  # for storing API inputs, outputs, and metadata
 
 
+# adapted from https://github.com/openai/openai-cookbook/blob/d891437737cf990a84fc7ac8516d615d7b65540b/examples/api_request_parallel_processor.py#L110
 async def process_api_requests(
     requests: Iterator[Callable[[], Awaitable[Any]]],
     max_requests_per_minute: float,
