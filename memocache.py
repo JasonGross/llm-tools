@@ -182,11 +182,13 @@ class Memoize:
             # use a tempfile so that we don't corrupt the cache if there's an error
             write_via_temp(self.cache_file, (lambda f: pickle.dump(self.cache, f)))
 
-    def kwargs_of_key(self, key: KEY) -> frozendict:
+    @staticmethod
+    def kwargs_of_key(key: KEY) -> frozendict:
         """Returns the kwargs of a key."""
         return key[1]
 
-    def args_of_key(self, key: KEY) -> tuple:
+    @staticmethod
+    def args_of_key(key: KEY) -> tuple:
         """Returns the args of a key."""
         return key[0]
 
@@ -206,7 +208,8 @@ class Memoize:
         for instance in cls.instances.values():
             instance._write_cache_to_disk()
 
-    def key_of_args(self, *args, **kwargs) -> KEY:
+    @staticmethod
+    def key_of_args(*args, **kwargs) -> KEY:
         return (to_immutable(args), to_immutable(kwargs))
 
     def _update_df(self, key: KEY, val: Any):
