@@ -251,6 +251,24 @@ class Memoize:
         self.cache[key] = val
         await asyncio.to_thread(self._write_cache_to_disk)
 
+    def get(self, *args, **kwargs):
+        """Gets a value from the cache."""
+        key = self.key_of_args(*args, **kwargs)
+
+        if not self.disk_write_only:
+            self._load_cache_from_disk()
+
+        return self.cache[key]
+
+    async def aget(self, *args, **kwargs):
+        """Gets a value from the cache."""
+        key = self.key_of_args(*args, **kwargs)
+
+        if not self.disk_write_only:
+            await asyncio.to_thread(self._load_cache_from_disk)
+
+        return self.cache[key]
+
     def _sync_call(self, *args, **kwargs):
         """Calls the function, caching the result if it hasn't been called with the same arguments before."""
         key = self.key_of_args(*args, **kwargs)
