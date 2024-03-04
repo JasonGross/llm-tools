@@ -133,7 +133,6 @@ class Memoize:
             self.df_cache: set = func.df_cache
             self.df = func.df
             self.df_thread_lock: threading.Lock = func.df_thread_lock
-            self.thread_lock: threading.Lock = func.thread_lock
             self.file_lock = func.file_lock
             self.force_async = func.force_async
             self.process_half_async = func.process_half_async
@@ -153,7 +152,6 @@ class Memoize:
                 else None
             )
             self.df_thread_lock: threading.Lock = threading.Lock()
-            self.thread_lock: threading.Lock = threading.Lock()
             self.file_lock: FileLock = FileLock(f"{self.cache_file}.lock")
             self.force_async = force_async
             self.process_half_async = process_half_async
@@ -174,17 +172,15 @@ class Memoize:
                     disk_cache = pickle.load(f)
             except FileNotFoundError:
                 return
-        with wrap_context(self.thread_lock, skip=not use_lock):
-            self.cache.update(disk_cache)
+        self.cache.update(disk_cache)
 
     def _write_cache_to_disk(self, skip_load: bool = False, use_lock: bool = True):
         """Writes the cache to disk.  The cache is locked while it's being written."""
-        with wrap_context(self.thread_lock, skip=not use_lock):
-            with wrap_context(self.file_lock, skip=not use_lock):
-                if not skip_load:
-                    self._load_cache_from_disk(use_lock=False)
-                # use a tempfile so that we don't corrupt the cache if there's an error
-                write_via_temp(self.cache_file, (lambda f: pickle.dump(self.cache, f)))
+        with wrap_context(self.file_lock, skip=not use_lock):
+            if not skip_load:
+                self._load_cache_from_disk(use_lock=False)
+            # use a tempfile so that we don't corrupt the cache if there's an error
+            write_via_temp(self.cache_file, (lambda f: pickle.dump(self.cache, f)))
 
     def kwargs_of_key(self, key: KEY) -> frozendict:
         """Returns the kwargs of a key."""
@@ -196,11 +192,10 @@ class Memoize:
 
     def _uncache(self, key: KEY):
         """Removes a key from the cache."""
-        with self.thread_lock:
-            with self.file_lock:
-                self._load_cache_from_disk(use_lock=False)
-                del self.cache[key]
-                self._write_cache_to_disk(skip_load=True, use_lock=False)
+        with self.file_lock:
+            self._load_cache_from_disk(use_lock=False)
+            del self.cache[key]
+            self._write_cache_to_disk(skip_load=True, use_lock=False)
 
     def uncache(self, *args, **kwargs):
         return self._uncache((to_immutable(args), to_immutable(kwargs)))
@@ -249,13 +244,11 @@ class Memoize:
             return val
 
     def _sync_overwrite_result(self, key, val):
-        with self.thread_lock:
-            self.cache[key] = val
+        self.cache[key] = val
         self._write_cache_to_disk()
 
     async def _async_overwrite_result(self, key, val):
-        async with async_lock(self.thread_lock):
-            self.cache[key] = val
+        self.cache[key] = val
         await asyncio.to_thread(self._write_cache_to_disk)
 
     def _sync_call(self, *args, **kwargs):
@@ -265,16 +258,15 @@ class Memoize:
         if not self.disk_write_only:
             self._load_cache_from_disk()
 
-        if key not in self.cache.keys():
+        try:
+            val = self.cache[key]
+        except KeyError:
             val = self.func(*args, **kwargs)
             val = (
                 self._sync_overwrite_result(key, val)
                 if not self.process_half_async
                 else self._process_half_async_result(key, val)
             )
-        else:
-            with self.thread_lock:
-                val = self.cache[key]
 
         self._update_df(key, val)
         return val
@@ -286,12 +278,11 @@ class Memoize:
         if not self.disk_write_only:
             await asyncio.to_thread(self._load_cache_from_disk)
 
-        if key not in self.cache.keys():
+        try:
+            val = self.cache[key]
+        except KeyError:
             val = await self.func(*args, **kwargs)
             await self._async_overwrite_result(key, val)
-        else:
-            async with async_lock(self.thread_lock):
-                val = self.cache[key]
 
         self._update_df(key, val)
         return val
