@@ -117,7 +117,12 @@ class Memoize:
         disk_write_only: bool = False,
         use_pandas: Optional[bool] = None,
         force_async: bool = False,
+        process_half_async: bool = True,
     ):
+        """Initializes the memoization decorator.
+
+        process_half_async: if a synchronous function returns a tuple or list of coroutines, then, when this is true, we jump through some extra hoops to ensure that the coroutines are awaited before the result is cached.
+        """
         if use_pandas is None:
             use_pandas = USE_PANDAS
         if isinstance(func, Memoize):
@@ -131,6 +136,7 @@ class Memoize:
             self.thread_lock: threading.Lock = func.thread_lock
             self.file_lock = func.file_lock
             self.force_async = func.force_async
+            self.process_half_async = func.process_half_async
             if name is not None:
                 Memoize.instances[name] = self
         else:
@@ -150,6 +156,7 @@ class Memoize:
             self.thread_lock: threading.Lock = threading.Lock()
             self.file_lock: FileLock = FileLock(f"{self.cache_file}.lock")
             self.force_async = force_async
+            self.process_half_async = process_half_async
             Memoize.instances[self.name] = self
             self.cache_file.parent.mkdir(parents=True, exist_ok=True)
             self._load_cache_from_disk()
@@ -215,6 +222,42 @@ class Memoize:
                     new_row = pd.DataFrame({"input": [key], "output": [val]})
                     self.df = pd.concat([self.df, new_row], ignore_index=True)
 
+    def _process_half_async_result(self, key, val):
+        if (isinstance(val, tuple) or isinstance(val, list)) and any(
+            asyncio.iscoroutine(x) for x in val
+        ):
+            list_vals = list(val)
+
+            def process_val(i, v):
+                if asyncio.iscoroutine(v):
+
+                    async def await_v(v):
+                        v = await v
+                        list_vals[i] = v
+                        if not any(asyncio.iscoroutine(x) for x in list_vals):
+                            await self._async_overwrite_result(
+                                key, type(val)(list_vals)
+                            )
+                        return v
+
+                    return await_v(v)
+                return v
+
+            return type(val)(process_val(i, v) for i, v in enumerate(val))
+        else:
+            self._sync_overwrite_result(key, val)
+            return val
+
+    def _sync_overwrite_result(self, key, val):
+        with self.thread_lock:
+            self.cache[key] = val
+        self._write_cache_to_disk()
+
+    async def _async_overwrite_result(self, key, val):
+        async with async_lock(self.thread_lock):
+            self.cache[key] = val
+        await asyncio.to_thread(self._write_cache_to_disk)
+
     def _sync_call(self, *args, **kwargs):
         """Calls the function, caching the result if it hasn't been called with the same arguments before."""
         key = self.key_of_args(*args, **kwargs)
@@ -224,9 +267,11 @@ class Memoize:
 
         if key not in self.cache.keys():
             val = self.func(*args, **kwargs)
-            with self.thread_lock:
-                self.cache[key] = val
-            self._write_cache_to_disk()
+            val = (
+                self._sync_overwrite_result(key, val)
+                if not self.process_half_async
+                else self._process_half_async_result(key, val)
+            )
         else:
             with self.thread_lock:
                 val = self.cache[key]
@@ -243,9 +288,7 @@ class Memoize:
 
         if key not in self.cache.keys():
             val = await self.func(*args, **kwargs)
-            async with async_lock(self.thread_lock):
-                self.cache[key] = val
-            await asyncio.to_thread(self._write_cache_to_disk)
+            await self._async_overwrite_result(key, val)
         else:
             async with async_lock(self.thread_lock):
                 val = self.cache[key]
