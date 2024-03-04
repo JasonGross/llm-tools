@@ -224,20 +224,17 @@ class Memoize:
 
     def _process_half_async_result(self, key, val):
         if (isinstance(val, tuple) or isinstance(val, list)) and any(
-            asyncio.iscoroutine(x) or asyncio.isfuture(x) for x in val
+            inspect.isawaitable(x) for x in val
         ):
             list_vals = list(val)
 
             def process_val(i, v):
-                if asyncio.iscoroutine(v) or asyncio.isfuture(v):
+                if inspect.isawaitable(v):
 
                     async def await_v(v):
                         v = await v
                         list_vals[i] = v
-                        if not any(
-                            asyncio.iscoroutine(x) or asyncio.isfuture(x)
-                            for x in list_vals
-                        ):
+                        if not any(inspect.isawaitable(x) for x in list_vals):
                             await self._async_overwrite_result(
                                 key, type(val)(list_vals)
                             )
